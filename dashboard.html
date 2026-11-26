@@ -1,0 +1,140 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fire Detection</title>
+<style>
+  body { margin: 0; background: #111; color: #eee; font-family: system-ui, sans-serif; }
+  header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: #1c1c1c; }
+  h1 { margin: 0; font-size: 20px; }
+  .controls { display: flex; gap: 12px; align-items: center; }
+  button, select, input { font: inherit; padding: 8px 12px; border-radius: 6px; border: 1px solid #444; background: #2a2a2a; color: #eee; }
+  button { cursor: pointer; }
+  button.primary { background: #1e88e5; border-color: #1e88e5; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 12px; padding: 12px; }
+  .card { background: #1c1c1c; border: 3px solid #333; border-radius: 6px; overflow: hidden; }
+  .card.alert { border-color: #e53935; }
+  .title { padding: 8px 12px; display: flex; gap: 12px; align-items: center; }
+  .name { flex: 1; font-weight: 600; }
+  .badge { color: #e53935; font-weight: bold; display: none; }
+  .alert .badge { display: block; }
+  .remove { padding: 4px 8px; }
+  img { width: 100%; display: block; background: #000; min-height: 200px; }
+  #empty { padding: 48px; text-align: center; color: #999; }
+  dialog { background: #1c1c1c; color: #eee; border: 1px solid #444; border-radius: 8px; width: min(420px, 90vw); }
+  dialog::backdrop { background: rgba(0, 0, 0, .6); }
+  dialog label { display: block; margin: 12px 0 4px; font-size: 14px; }
+  dialog input { width: 100%; box-sizing: border-box; }
+  small { color: #999; }
+  .buttons { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  #message { margin-top: 12px; min-height: 20px; }
+  .ok { color: #66bb6a; } .error { color: #ef5350; }
+</style>
+
+<header>
+  <h1>Fire Detection</h1>
+  <div class="controls">
+    <label>Sensitivity
+      <select id="sensitivity">
+        <option value="low">Low (fewest false alarms)</option>
+        <option value="medium">Medium</option>
+        <option value="high">High (catches more)</option>
+      </select>
+    </label>
+    <button class="primary" id="open-add">+ Add camera</button>
+  </div>
+</header>
+
+<div id="empty" hidden>No cameras yet. Click "+ Add camera" to get started.</div>
+<div id="grid"></div>
+
+<dialog id="add-dialog">
+  <form id="add-form" method="dialog">
+    <h2>Add camera</h2>
+    <label for="name">Name</label>
+    <input id="name" placeholder="e.g. Warehouse" required>
+    <label for="address">Camera address</label>
+    <input id="address" placeholder="rtsp://192.168.1.10:554/stream" required>
+    <small>Type 0 to use this computer's webcam.</small>
+    <label for="username">Username <small>(if the camera needs one)</small></label>
+    <input id="username" autocomplete="off">
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="off">
+    <div id="message"></div>
+    <div class="buttons">
+      <button type="button" id="cancel">Cancel</button>
+      <button type="button" id="test">Test connection</button>
+      <button type="submit" class="primary">Add</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const cards = new Map();
+
+  async function api(method, path, body) {
+    const response = await fetch(path, {
+      method, headers: { "Content-Type": "application/json" }, body: body && JSON.stringify(body),
+    });
+    return response.json();
+  }
+
+  function createCard(name) {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `<div class="title"><span class="name"></span>
+      <span class="badge">FIRE / SMOKE ALERT</span>
+      <button class="remove">Remove</button></div><img>`;
+    card.querySelector(".name").textContent = name;
+    card.querySelector("img").src = "/stream/" + encodeURIComponent(name);
+    card.querySelector(".remove").onclick = async () => {
+      if (confirm(`Remove camera "${name}"?`)) { await api("DELETE", "/api/cameras/" + encodeURIComponent(name)); refresh(); }
+    };
+    return card;
+  }
+
+  async function refresh() {
+    const state = await (await fetch("/api/state")).json();
+    const names = new Set(state.cameras.map(c => c.name));
+    for (const [name, card] of cards) {
+      if (!names.has(name)) { card.remove(); cards.delete(name); }
+    }
+    for (const { name, alert } of state.cameras) {
+      if (!cards.has(name)) { const card = createCard(name); cards.set(name, card); $("grid").append(card); }
+      cards.get(name).classList.toggle("alert", alert);
+    }
+    $("empty").hidden = state.cameras.length > 0;
+    if (document.activeElement !== $("sensitivity")) $("sensitivity").value = state.sensitivity;
+  }
+
+  const cameraForm = () => ({
+    name: $("name").value, address: $("address").value,
+    username: $("username").value, password: $("password").value,
+  });
+
+  function showMessage(text, kind) { $("message").textContent = text; $("message").className = kind; }
+
+  $("sensitivity").onchange = () => api("POST", "/api/sensitivity", { level: $("sensitivity").value });
+  $("open-add").onclick = () => { $("add-form").reset(); showMessage("", ""); $("add-dialog").showModal(); };
+  $("cancel").onclick = () => $("add-dialog").close();
+
+  $("test").onclick = async () => {
+    showMessage("Testing... this can take a few seconds.", "");
+    const result = await api("POST", "/api/cameras/test", cameraForm());
+    if (!result.ok) return showMessage(result.error, "error");
+    showMessage(result.connected ? "Connected. Video is coming through." :
+      "Couldn't get video. Check the address, username and password, and that the camera is on and on the same network.",
+      result.connected ? "ok" : "error");
+  };
+
+  $("add-form").onsubmit = async event => {
+    event.preventDefault();
+    const result = await api("POST", "/api/cameras", cameraForm());
+    if (!result.ok) return showMessage(result.error, "error");
+    $("add-dialog").close();
+    refresh();
+  };
+
+  refresh();
+  setInterval(refresh, 2000);
+</script>
