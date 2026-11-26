@@ -1,0 +1,11 @@
+[project]
+name = "fire-detection"
+version = "0.1.0"
+description = "Multi-camera IP stream fire and smoke detection"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "ultralytics",
+    "opencv-python-headless",
+    "tomli-w>=1.2.0",
+]
