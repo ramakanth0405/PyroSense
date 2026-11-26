@@ -1,0 +1,4 @@
+ultralytics
+opencv-python-headless
+tomli-w>=1.2.0
+
